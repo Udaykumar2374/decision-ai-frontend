@@ -1,23 +1,25 @@
-"use client"
+"use client";
 
-import type React from "react"
+import type React from "react";
+import { useState, useRef, useEffect } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Badge } from "@/components/ui/badge";
+import { Send, User, Bot, Paperclip, Mic } from "lucide-react";
+import type { DecisionSession } from "@/app/dashboard/page";
 
-import { useState, useRef, useEffect } from "react"
-import { motion, AnimatePresence } from "framer-motion"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { ScrollArea } from "@/components/ui/scroll-area"
-import { Badge } from "@/components/ui/badge"
-import { Send, User, Bot, Paperclip, Mic } from "lucide-react"
-import type { DecisionSession } from "@/app/dashboard/page"
+// ⬇️ Backend helper (create src/lib/api.ts as shown earlier)
+import { askBackend, type ChatMessage as APIMessage } from "@/lib/api";
 
 interface ChatInterfaceProps {
-  session?: DecisionSession
-  onUpdateSession: (updates: Partial<DecisionSession>) => void
-  onQuestionSubmit?: (question: string, context: string) => void
-  sidebarOpen: boolean
-  onToggleSidebar: () => void
+  session?: DecisionSession;
+  onUpdateSession: (updates: Partial<DecisionSession>) => void;
+  onQuestionSubmit?: (question: string, context: string) => void;
+  sidebarOpen: boolean;
+  onToggleSidebar: () => void;
 }
 
 export function ChatInterface({
@@ -27,122 +29,99 @@ export function ChatInterface({
   sidebarOpen,
   onToggleSidebar,
 }: ChatInterfaceProps) {
-  const [question, setQuestion] = useState("")
-  const [isLoading, setIsLoading] = useState(false)
-  const inputRef = useRef<HTMLInputElement>(null)
-  const scrollAreaRef = useRef<HTMLDivElement>(null)
+  const [question, setQuestion] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
 
-  const hasMessages = session?.messages && session.messages.length > 0
-  const hasStartedChat = hasMessages || isLoading
+  const hasMessages = session?.messages && session.messages.length > 0;
+  const hasStartedChat = hasMessages || isLoading;
 
   useEffect(() => {
     if (scrollAreaRef.current) {
-      const scrollContainer = scrollAreaRef.current.querySelector("[data-radix-scroll-area-viewport]")
+      const scrollContainer = scrollAreaRef.current.querySelector(
+        "[data-radix-scroll-area-viewport]"
+      ) as HTMLDivElement | null;
       if (scrollContainer) {
-        scrollContainer.scrollTop = scrollContainer.scrollHeight
+        scrollContainer.scrollTop = scrollContainer.scrollHeight;
       }
     }
-  }, [session?.messages, isLoading])
+  }, [session?.messages, isLoading]);
+
+  // Map your UI messages to the API shape {role, content}
+  const toAPI = (msgs: { type: "question" | "response"; content: string }[]): APIMessage[] =>
+    msgs.map((m) => ({
+      role: m.type === "question" ? "user" : "assistant",
+      content: m.content,
+    }));
 
   const handleSubmit = async (e?: React.FormEvent) => {
-  e?.preventDefault()
-  if (!question.trim() || !session) return
+    e?.preventDefault();
+    if (!question.trim() || !session) return;
 
-  setIsLoading(true)
-  onQuestionSubmit?.(question, "")
+    setIsLoading(true);
+    onQuestionSubmit?.(question, "");
 
-  const newQuestionMessage = {
-    id: Date.now().toString(),
-    type: "question" as const,
-    content: question,
-  }
+    const newQuestionMessage = {
+      id: Date.now().toString(),
+      type: "question" as const,
+      content: question,
+    };
 
-  const currentQuestion = question
-  setQuestion("")
+    const currentQuestion = question;
+    setQuestion("");
 
-  const previousMessages = (session.messages || []).map((msg) => ({
-    role: msg.type === "question" ? "user" : "assistant",
-    content: msg.content,
-  }))
+    const previousMessages = toAPI(session.messages || []);
+    const messagesForBackend: APIMessage[] = [
+      ...previousMessages,
+      { role: "user", content: currentQuestion },
+    ];
 
-  const messagesForBackend = [
-    ...previousMessages,
-    { role: "user", content: currentQuestion },
-  ]
+    try {
+      const { answer } = await askBackend(messagesForBackend);
 
-  try {
-    const res = await fetch("http://localhost:8000/ask", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ messages: messagesForBackend }),
-    })
+      const newResponseMessage = {
+        id: (Date.now() + 1).toString(),
+        type: "response" as const,
+        content: answer || "⚠️ Sorry, I couldn't find an answer.",
+      };
 
-    const data = await res.json()
+      onUpdateSession({
+        messages: [...(session.messages || []), newQuestionMessage, newResponseMessage],
+      });
+    } catch (err: any) {
+      console.error("Error calling backend:", err);
+      const errorMessage = {
+        id: (Date.now() + 2).toString(),
+        type: "response" as const,
+        content: "⚠️ There was an error processing your request.",
+      };
 
-    const newResponseMessage = {
-      id: (Date.now() + 1).toString(),
-      type: "response" as const,
-      content: data.answer || "⚠️ Sorry, I couldn't find an answer.",
+      onUpdateSession({
+        messages: [...(session.messages || []), newQuestionMessage, errorMessage],
+      });
+    } finally {
+      setIsLoading(false);
     }
-
-    onUpdateSession({
-      messages: [...(session.messages || []), newQuestionMessage, newResponseMessage],
-    })
-  } catch (err) {
-    console.error("Error calling backend:", err)
-    const errorMessage = {
-      id: (Date.now() + 2).toString(),
-      type: "response" as const,
-      content: "⚠️ There was an error processing your request.",
-    }
-
-    onUpdateSession({
-      messages: [...(session.messages || []), newQuestionMessage, errorMessage],
-    })
-  } finally {
-    setIsLoading(false)
-  }
-}
-
+  };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault()
-      handleSubmit()
+      e.preventDefault();
+      handleSubmit();
     }
-  }
-
-  const generateMockResponse = (question: string) => {
-    return `I've analyzed your decision: "${question}"
-
-**Key Considerations:**
-• Current situation assessment
-• Potential outcomes and implications  
-• Risk factors to consider
-• Timeline and urgency
-
-**My Recommendation:**
-Based on your question, I suggest taking a systematic approach. Consider gathering additional information, weighing the pros and cons, and setting a clear decision timeline.
-
-**Next Steps:**
-1. List your key criteria for success
-2. Research additional options if needed
-3. Consult with relevant stakeholders
-4. Set a decision deadline and stick to it`
-  }
+  };
 
   const formatTimestamp = (date: Date) => {
-    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-  }
+    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  };
 
   const suggestionQuestions = [
     "Should I change careers?",
     "Should I invest in stocks or real estate?",
     "Should I move to a new city?",
     "Should I start my own business?",
-  ]
+  ];
 
   if (!session) {
     return (
@@ -154,29 +133,25 @@ Based on your question, I suggest taking a systematic approach. Consider gatheri
           className="text-center max-w-md mx-auto p-8"
         >
           <motion.div
-            animate={{
-              rotate: [0, 10, -10, 0],
-              scale: [1, 1.1, 1],
-            }}
-            transition={{
-              duration: 2,
-              repeat: Number.POSITIVE_INFINITY,
-              repeatDelay: 3,
-            }}
+            animate={{ rotate: [0, 10, -10, 0], scale: [1, 1.1, 1] }}
+            transition={{ duration: 2, repeat: Number.POSITIVE_INFINITY, repeatDelay: 3 }}
             className="text-6xl mb-6"
           >
             🧠
           </motion.div>
-          <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-4">Welcome to Decidely</h2>
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-4">
+            Welcome to Decidely
+          </h2>
           <p className="text-gray-600 dark:text-gray-400 mb-6">
-            Your AI-powered decision-making assistant is ready to help you think through important choices.
+            Your AI-powered decision-making assistant is ready to help you think through
+            important choices.
           </p>
         </motion.div>
       </div>
-    )
+    );
   }
 
-  // Centered input for new sessions (ChatGPT style)
+  // Centered input for new sessions
   if (!hasStartedChat) {
     return (
       <div className="flex flex-col h-full bg-white dark:bg-gray-900">
@@ -185,15 +160,8 @@ Based on your question, I suggest taking a systematic approach. Consider gatheri
             {/* Hero Section */}
             <div className="text-center mb-12">
               <motion.div
-                animate={{
-                  rotate: [0, 10, -10, 0],
-                  scale: [1, 1.1, 1],
-                }}
-                transition={{
-                  duration: 2,
-                  repeat: Number.POSITIVE_INFINITY,
-                  repeatDelay: 3,
-                }}
+                animate={{ rotate: [0, 10, -10, 0], scale: [1, 1.1, 1] }}
+                transition={{ duration: 2, repeat: Number.POSITIVE_INFINITY, repeatDelay: 3 }}
                 className="text-6xl mb-6"
               >
                 🧠
@@ -201,7 +169,9 @@ Based on your question, I suggest taking a systematic approach. Consider gatheri
               <h1 className="text-4xl font-bold text-gray-900 dark:text-gray-100 mb-4">
                 What decision can I help you with?
               </h1>
-              <p className="text-xl text-gray-600 dark:text-gray-400">Get AI-powered analysis to make better choices</p>
+              <p className="text-xl text-gray-600 dark:text-gray-400">
+                Get AI-powered analysis to make better choices
+              </p>
             </div>
 
             {/* Main Input */}
@@ -259,7 +229,7 @@ Based on your question, I suggest taking a systematic approach. Consider gatheri
           </div>
         </div>
       </div>
-    )
+    );
   }
 
   // Chat view with messages and bottom input
@@ -285,11 +255,16 @@ Based on your question, I suggest taking a systematic approach. Consider gatheri
                           <div className="flex-1">
                             <p className="font-medium mb-2">{message.content}</p>
                             <div className="flex items-center justify-between mt-3">
-                              <Badge variant="secondary" className="bg-blue-700 dark:bg-blue-800 text-blue-100">
+                              <Badge
+                                variant="secondary"
+                                className="bg-blue-700 dark:bg-blue-800 text-blue-100"
+                              >
                                 <User className="w-3 h-3 mr-1" />
                                 You
                               </Badge>
-                              <span className="text-xs text-blue-200">{formatTimestamp(new Date())}</span>
+                              <span className="text-xs text-blue-200">
+                                {formatTimestamp(new Date())}
+                              </span>
                             </div>
                           </div>
                         </div>
@@ -316,7 +291,10 @@ Based on your question, I suggest taking a systematic approach. Consider gatheri
                       <CardContent>
                         <div className="prose prose-sm max-w-none">
                           {message.content.split("\n").map((line, i) => (
-                            <p key={i} className="mb-2 text-gray-700 dark:text-gray-300 leading-relaxed">
+                            <p
+                              key={i}
+                              className="mb-2 text-gray-700 dark:text-gray-300 leading-relaxed"
+                            >
                               {line}
                             </p>
                           ))}
@@ -335,7 +313,11 @@ Based on your question, I suggest taking a systematic approach. Consider gatheri
           </AnimatePresence>
 
           {isLoading && (
-            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="flex justify-start">
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="flex justify-start"
+            >
               <Card className="max-w-3xl bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
                 <CardContent className="p-6">
                   <div className="flex items-center space-x-3">
@@ -345,17 +327,15 @@ Based on your question, I suggest taking a systematic approach. Consider gatheri
                       className="w-6 h-6 border-2 border-blue-600 dark:border-blue-400 border-t-transparent rounded-full"
                     />
                     <div className="flex-1">
-                      <p className="text-gray-600 dark:text-gray-400">Decidely is analyzing your decision...</p>
+                      <p className="text-gray-600 dark:text-gray-400">
+                        Decidely is analyzing your decision...
+                      </p>
                       <div className="flex space-x-1 mt-2">
                         {[0, 1, 2].map((i) => (
                           <motion.div
                             key={i}
                             animate={{ opacity: [0.3, 1, 0.3] }}
-                            transition={{
-                              duration: 1.5,
-                              repeat: Number.POSITIVE_INFINITY,
-                              delay: i * 0.2,
-                            }}
+                            transition={{ duration: 1.5, repeat: Number.POSITIVE_INFINITY, delay: i * 0.2 }}
                             className="w-2 h-2 bg-blue-400 dark:bg-blue-500 rounded-full"
                           />
                         ))}
@@ -401,5 +381,5 @@ Based on your question, I suggest taking a systematic approach. Consider gatheri
         </div>
       </div>
     </div>
-  )
+  );
 }
